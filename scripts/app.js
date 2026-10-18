@@ -1,5 +1,5 @@
 /* =========================================================
-   Capital Media: cinematic edition
+   Voitz Media: cinematic edition
    Each scene reads its own scroll progress inside one rAF loop.
    ========================================================= */
 (() => {

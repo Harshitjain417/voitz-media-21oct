@@ -5,10 +5,10 @@
    ========================================================= */
 
 window.SITE = {
-  name: "Capital Media",
+  name: "Voitz Media",
   short: "cm",
-  domain: "capitalmedia.studio",
-  email: "hello@capitalmedia.studio",
+  domain: "voitzmedia.studio",
+  email: "hello@voitzmedia.studio",
   bookingUrl: "https://calendly.com/", // your Calendly / Cal.com link
   socials: {
     LinkedIn: "https://linkedin.com/",

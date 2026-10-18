@@ -1,4 +1,4 @@
-# Capital Media: Creative Video Studio for Finance + SaaS
+# Voitz Media: Creative Video Studio for Finance + SaaS
 
 Agency website for US finance, fintech and SaaS clients. Plain HTML/CSS/JS, so there is nothing to install.
 
