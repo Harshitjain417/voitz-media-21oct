@@ -316,8 +316,79 @@
       const t = id === "#top" ? null : id.length > 1 && $(id);
       if (t === false) return;
       e.preventDefault();
-      scrollTo({ top: t ? t.getBoundingClientRect().top + scrollY : 0, behavior: reduce ? "auto" : "smooth" });
+      smoothTo(t ? t.getBoundingClientRect().top + scrollY : 0);
     }));
+  }
+
+  /* ---------------- loader, smooth scroll, FAQ, video scenes ---------------- */
+  let lenis = null;
+  function smoothTo(top) {
+    if (lenis) lenis.scrollTo(top, { duration: 1.4 });
+    else scrollTo({ top, behavior: reduce ? "auto" : "smooth" });
+  }
+  function initLoader() {
+    const el = $("#loader");
+    if (!el) return;
+    const started = performance.now();
+    const done = () => {
+      const wait = Math.max(0, 900 - (performance.now() - started));
+      setTimeout(() => el.classList.add("is-done"), wait);
+    };
+    if (document.readyState === "complete") done(); else addEventListener("load", done, { once: true });
+    setTimeout(() => el.classList.add("is-done"), 2500);
+  }
+  function initSmoothScroll() {
+    if (reduce || typeof window.Lenis !== "function") return;
+    lenis = new window.Lenis({ lerp: 0.09, smoothWheel: true });
+    (function raf(t) { lenis.raf(t); requestAnimationFrame(raf); })(performance.now());
+    // pause page scrolling while the case-study panel is open
+    new MutationObserver(() => (document.body.classList.contains("lock") ? lenis.stop() : lenis.start()))
+      .observe(document.body, { attributes: true, attributeFilter: ["class"] });
+  }
+  function initFaq() {
+    $$("#faqList details").forEach((d) => {
+      const p = $("p", d), body = document.createElement("div");
+      body.className = "faq__body"; d.insertBefore(body, p); body.appendChild(p);
+      $("summary", d).addEventListener("click", (e) => {
+        e.preventDefault();
+        if (reduce) { d.open = !d.open; return; }
+        if (d.open) {
+          body.style.height = body.scrollHeight + "px";
+          requestAnimationFrame(() => { body.style.height = "0px"; body.style.opacity = "0"; });
+          setTimeout(() => { d.open = false; body.style.height = ""; body.style.opacity = ""; }, 350);
+        } else {
+          d.open = true;
+          const h = body.scrollHeight;
+          body.style.height = "0px"; body.style.opacity = "0";
+          requestAnimationFrame(() => { body.style.height = h + "px"; body.style.opacity = "1"; });
+          setTimeout(() => { body.style.height = ""; }, 360);
+        }
+      });
+    });
+  }
+  // looping scene videos (wide screens only), layered over their still photo
+  const sceneVideos = [];
+  function initSceneVideos() {
+    if (reduce || matchMedia("(max-aspect-ratio: 4/5)").matches) return;
+    const map = { hero: "assets/video/hero.mp4", fog: "assets/video/fog.mp4", light: "assets/video/lamp.mp4" };
+    stage.layers.forEach((l) => {
+      const src = map[l.el.dataset.for];
+      if (!src) return;
+      const v = document.createElement("video");
+      Object.assign(v, { muted: true, loop: true, playsInline: true, preload: l.el.dataset.for === "hero" ? "auto" : "metadata", src });
+      v.setAttribute("aria-hidden", "true");
+      v.addEventListener("playing", () => v.classList.add("is-playing"));
+      v.addEventListener("error", () => v.remove(), { once: true });
+      l.el.appendChild(v);
+      sceneVideos.push({ v, layer: l.el });
+    });
+  }
+  function updateSceneVideos() {
+    sceneVideos.forEach(({ v, layer }) => {
+      const on = layer.style.visibility !== "hidden";
+      if (on && v.paused) v.play().catch(() => {});
+      else if (!on && !v.paused) v.pause();
+    });
   }
 
   /* ---------------- master loop ---------------- */
@@ -334,6 +405,7 @@
     updateCases(vh);
     updateSteps(vh);
     updateStage(vh);
+    updateSceneVideos();
     requestAnimationFrame(loop);
   }
 
@@ -381,7 +453,7 @@
   }
   function initMagnetic() {
     if (!fine) return;
-    $(".pill, .nav__cta").forEach((el) => {
+    $$(".pill, .nav__cta").forEach((el) => {
       el.addEventListener("pointermove", (e) => {
         const r = el.getBoundingClientRect();
         el.style.transform = `translate(${(e.clientX - r.left - r.width / 2) * 0.25}px, ${(e.clientY - r.top - r.height / 2) * 0.3}px)`;
@@ -401,7 +473,7 @@
   }
   function initWordReveal() {
     const io = new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) { e.target.classList.add("is-in"); io.unobserve(e.target); } }), { threshold: 0.3 });
-    $(".light__title, .sky__title, .steps__title, .wall__title, .start__title, .foot__line").forEach((el) => {
+    $$(".light__title, .sky__title, .steps__title, .wall__title, .start__title, .foot__line").forEach((el) => {
       let i = 0;
       const walk = (node) => [...node.childNodes].forEach((ch) => {
         if (ch.nodeType === 3) {
@@ -436,7 +508,7 @@
       const r = wall.getBoundingClientRect();
       spot.style.setProperty("--sx", `${e.clientX - r.left}px`); spot.style.setProperty("--sy", `${e.clientY - r.top}px`);
     });
-    $("#wallNames li").forEach((li) => li.addEventListener("pointermove", (e) => {
+    $$("#wallNames li").forEach((li) => li.addEventListener("pointermove", (e) => {
       const r = li.getBoundingClientRect();
       li.style.setProperty("--lx", `${e.clientX - r.left}px`); li.style.setProperty("--ly", `${e.clientY - r.top}px`);
     }));
@@ -445,7 +517,7 @@
     const n = light.items.length;
     light.items.forEach((it, i) => it.addEventListener("click", () => {
       const s = light.section, p = (i / Math.max(1, n - 1) + 0.05) / 1.1;
-      scrollTo({ top: s.offsetTop + p * (s.offsetHeight - innerHeight), behavior: reduce ? "auto" : "smooth" });
+      smoothTo(s.offsetTop + p * (s.offsetHeight - innerHeight));
     }));
   }
 
@@ -463,6 +535,10 @@
   runArts();
   loop();
   initStage();
+  initLoader();
+  initSmoothScroll();
+  initFaq();
+  initSceneVideos();
   initCursor();
   initMagnetic();
   initHeroParallax();

@@ -1,0 +1,474 @@
+/* =========================================================
+   Voitz Media: cinematic edition
+   Each scene reads its own scroll progress inside one rAF loop.
+   ========================================================= */
+(() => {
+  const SITE = window.SITE || {};
+  const CASES = window.CASES || [];
+  const SERVICES = window.SERVICES || [];
+  const EXPERIENCE = window.EXPERIENCE || [];
+
+  const $ = (s, el = document) => el.querySelector(s);
+  const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+  const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const pad = (n) => String(n).padStart(2, "0");
+  const fmt = (n) => (n >= 1000 ? n.toLocaleString("en-US") : String(n));
+  const rng = (seed) => () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
+  const hexA = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`; };
+  // progress of a tall sticky section: 0 when its top hits the viewport top, 1 when its bottom does
+  const progress = (el, vh) => { const r = el.getBoundingClientRect(); return clamp(-r.top / (r.height - vh)); };
+
+  /* ---------------- texture ----------------
+     Cut an evenly dense band out of the stipple and mirror it,
+     so the page gets a seamless grain tile at native dot size. */
+  function initTexture() {
+    const img = new Image();
+    img.onload = () => {
+      const y0 = Math.round(img.height * 0.56), bh = Math.round(img.height * 0.06);
+      const c = document.createElement("canvas");
+      c.width = img.width; c.height = bh * 2;
+      const x = c.getContext("2d");
+      x.drawImage(img, 0, y0, img.width, bh, 0, 0, img.width, bh);
+      x.translate(0, bh * 2); x.scale(1, -1);
+      x.drawImage(img, 0, y0, img.width, bh, 0, 0, img.width, bh);
+      try { document.documentElement.style.setProperty("--tex", `url(${c.toDataURL("image/png")})`); } catch (e) {}
+    };
+    img.src = "../assets/img/stipple.webp";
+  }
+
+  /* ---------------- content ---------------- */
+  function fill() {
+    $$(".js-email").forEach((a) => (a.href = `mailto:${SITE.email}`));
+    $$(".js-email-text").forEach((e) => (e.textContent = SITE.email));
+    $$(".js-booking").forEach((a) => (a.href = SITE.bookingUrl || `mailto:${SITE.email}`));
+    $("#year").textContent = new Date().getFullYear();
+    $("#socials").innerHTML = Object.entries(SITE.socials || {}).filter(([, v]) => v)
+      .map(([k, v]) => `<a href="${esc(v)}" target="_blank" rel="noopener">${esc(k)}</a>`).join("");
+    $("#wallNames").innerHTML = EXPERIENCE.map((b) => `<li><b>${esc(b.name)}</b><small>${esc(b.type)}</small></li>`).join("");
+  }
+
+  function initRotator() {
+    const el = $("#rot"), words = SITE.niches || ["brokerages"];
+    let i = 0;
+    el.textContent = words[0];
+    setInterval(() => {
+      el.classList.add("out");
+      setTimeout(() => { i = (i + 1) % words.length; el.textContent = words[i]; el.classList.remove("out"); }, 380);
+    }, 2400);
+  }
+
+  function initClocks() {
+    const t = (tz) => new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: tz }).format(new Date());
+    const tick = () => { $("#cNY").textContent = t("America/New_York"); $("#cSF").textContent = t("America/Los_Angeles"); $("#cIN").textContent = t("Asia/Kolkata"); };
+    tick(); setInterval(tick, 15000);
+  }
+
+  /* ---------------- 3. light: services reel ---------------- */
+  const light = { idx: -1 };
+  function initLight() {
+    light.section = $("#light");
+    light.reel = $("#lightReel");
+    light.desc = $("#lightDesc");
+    light.lamp = $(".light__lamp");
+    light.reel.innerHTML = SERVICES.map((s) => `<span class="light__item">${esc(s.name)}</span>`).join("");
+    light.items = $$(".light__item", light.reel);
+  }
+  function updateLight(vh) {
+    const p = progress(light.section, vh);
+    const n = light.items.length;
+    if (!n) return;
+    const f = clamp(p * 1.1 - 0.05) * (n - 1);
+    const itemH = light.items[0].offsetHeight;
+    const focus = vh * 0.56 - vh * 0.5; // the beam's brightest point, relative to the reel's anchor
+    light.reel.style.transform = `translate3d(0, ${focus - (f + 0.5) * itemH}px, 0)`;
+    const idx = Math.round(f);
+    if (idx !== light.idx) {
+      light.idx = idx;
+      light.items.forEach((it, i) => it.classList.toggle("lit", i === idx));
+      light.desc.classList.add("swap");
+      setTimeout(() => { light.desc.textContent = SERVICES[idx].desc; light.desc.classList.remove("swap"); }, 200);
+    }
+    const near = 1 - Math.min(1, Math.abs(f - idx) * 2);
+    light.lamp.style.setProperty("--glow", (0.06 + near * 0.16).toFixed(3));
+  }
+
+  /* ---------------- 4. window zoom ---------------- */
+  const win = {};
+  function initWindow() {
+    win.section = $("#window"); win.img = $("#windowImg"); win.pin = $(".window__pin");
+    const place = () => {
+      // where the window glass lands inside the cover-fitted stage image (wide vs tall photo)
+      const tall = matchMedia("(max-aspect-ratio: 4/5)").matches;
+      const [iw, ih, fx, fy] = tall ? [1536, 2752, 0.5, 0.33] : [2752, 1536, 0.505, 0.27];
+      const W = innerWidth, H = innerHeight;
+      const s = Math.max(W / iw, H / ih), dw = iw * s, dh = ih * s;
+      const ox = (W - dw) * 0.5 + dw * fx, oy = (H - dh) * 0.5 + dh * fy;
+      win.img.style.transformOrigin = `${ox}px ${oy}px`;
+    };
+    place(); addEventListener("resize", place);
+  }
+  function updateWindow(vh) {
+    const p = progress(win.section, vh);
+    const z = clamp(p / 0.85);
+    win.img.style.setProperty("--wz", (1 + Math.pow(z, 2.6) * 7).toFixed(3));
+    // the line shows while the room is still dark, then clears before the zoom fills the sky
+    const tIn = clamp((p - 0.02) / 0.12), tOut = 1 - clamp((p - 0.3) / 0.14);
+    win.pin.style.setProperty("--wt", Math.min(tIn, tOut).toFixed(3));
+    win.pin.style.setProperty("--wsky", clamp((p - 0.72) / 0.25).toFixed(3));
+  }
+
+  /* ---------------- 2. fog ---------------- */
+  const fog = {};
+  function initFog() {
+    fog.section = $("#fog"); fog.img = $("#fogImg"); fog.layer = $("#fogLayer");
+    fog.lines = $$(".fog__line").map((el) => ({ el, at: +el.dataset.at }));
+  }
+  function updateFog(vh) {
+    const p = progress(fog.section, vh);
+    fog.img.style.setProperty("--fz", (1.15 - p * 0.15).toFixed(3));
+    fog.layer.style.setProperty("--fog", (1 - clamp(p / 0.8) * 0.9).toFixed(3));
+    fog.lines.forEach((l, i) => {
+      const next = fog.lines[i + 1];
+      const on = p >= l.at && (!next || p < next.at);
+      l.el.classList.toggle("on", on);
+      l.el.classList.toggle("gone", !on && p >= l.at);
+    });
+  }
+
+  /* ---------------- case art (until real videos are added) ---------------- */
+  const arts = new Set();
+  function makeArt(canvas, color, seed) {
+    const ctx = canvas.getContext("2d"), R = rng(seed * 97 + 13);
+    const pts = []; let v = 20;
+    for (let i = 0; i < 48; i++) { v += (R() - 0.32) * 9; v = Math.max(4, v); pts.push(v); }
+    const bars = Array.from({ length: 20 }, () => 0.2 + R() * 0.8);
+    const art = { canvas, visible: false, t: 0 };
+    art.draw = (dt) => {
+      const w = canvas.clientWidth, h = canvas.clientHeight;
+      if (!w || !h) return;
+      const dpr = Math.min(devicePixelRatio || 1, 2);
+      if (canvas.width !== Math.round(w * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      art.t += dt * 0.001; const t = art.t;
+      ctx.fillStyle = "#0d0f12"; ctx.fillRect(0, 0, w, h);
+      const g = ctx.createRadialGradient(w * .7, h * .25, 0, w * .7, h * .25, Math.max(w, h) * .8);
+      g.addColorStop(0, hexA(color, .28)); g.addColorStop(1, "rgba(0,0,0,0)"); ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+      const bw = w / bars.length;
+      bars.forEach((b, i) => { const bh = h * .3 * b * (.75 + .25 * Math.sin(t * 1.3 + i * .6)); ctx.fillStyle = hexA(color, .1 + .12 * b); ctx.fillRect(i * bw + bw * .22, h - bh, bw * .56, bh); });
+      const prog = clamp(((t * .22) % 1.3)), max = Math.max(...pts), n = pts.length;
+      const X = (i) => (i / (n - 1)) * w, Y = (val) => h * .84 - (val / max) * h * .55, upto = Math.max(2, Math.floor(prog * n));
+      ctx.beginPath(); for (let i = 0; i < upto; i++) i ? ctx.lineTo(X(i), Y(pts[i])) : ctx.moveTo(X(i), Y(pts[i]));
+      ctx.strokeStyle = color; ctx.lineWidth = 2.4; ctx.shadowColor = color; ctx.shadowBlur = 14; ctx.stroke(); ctx.shadowBlur = 0;
+    };
+    new IntersectionObserver(([e]) => (art.visible = e.isIntersecting)).observe(canvas);
+    arts.add(art);
+  }
+  function runArts() {
+    let last = performance.now();
+    (function loop(now) {
+      const dt = Math.min(now - last, 50); last = now;
+      arts.forEach((a) => { if (!document.body.contains(a.canvas)) return arts.delete(a); if (a.visible) a.draw(dt); });
+      requestAnimationFrame(loop);
+    })(last);
+  }
+  function attachVideo(box, src) {
+    if (!src) return;
+    const v = document.createElement("video");
+    Object.assign(v, { muted: true, loop: true, playsInline: true, autoplay: true, preload: "metadata", src });
+    v.addEventListener("loadeddata", () => { box.classList.add("has-video"); v.play().catch(() => {}); }, { once: true });
+    v.addEventListener("error", () => v.remove(), { once: true });
+    box.appendChild(v);
+  }
+
+  /* ---------------- 5. case cards ---------------- */
+  let panels = [];
+  function initCases() {
+    $("#cases").innerHTML = CASES.map((c, i) => `
+      <article class="ccard" style="--c:${c.color}">
+        <div class="ccard__info">
+          <span class="ccard__sector">${esc(c.client)} · ${esc(c.sector)}</span>
+          <h3 class="ccard__title">${esc(c.title)}</h3>
+          <div class="ccard__metric"><b>${esc(c.headline)}</b><span>${esc(c.headlineLabel)}</span></div>
+          <button class="pill pill--dark ccard__open" data-case="${i}">Read the case study <b>›</b></button>
+        </div>
+        <div class="ccard__panel" data-case="${i}" role="button" tabindex="0" aria-label="Open case study: ${esc(c.title)}">
+          <div class="ccard__ui"><span><i></i><i></i><i></i></span><span>${esc(c.tags[0])}</span></div>
+          <canvas></canvas>
+          <span class="ccard__play" aria-hidden="true"></span>
+        </div>
+      </article>`).join("");
+    panels = $$(".ccard__panel");
+    panels.forEach((p, i) => { makeArt($("canvas", p), CASES[i].color, i + 1); attachVideo(p, CASES[i].video); });
+    $$("[data-case]").forEach((el) => {
+      el.addEventListener("click", () => openCase(+el.dataset.case));
+      el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openCase(+el.dataset.case); } });
+    });
+  }
+  function updateCases(vh) {
+    panels.forEach((p) => {
+      const r = p.getBoundingClientRect();
+      const tilt = clamp((r.top - vh * 0.18) / (vh * 0.6));
+      p.style.setProperty("--tilt", tilt.toFixed(3));
+    });
+  }
+
+  /* ---------------- case panel ---------------- */
+  const cp = { idx: 0 };
+  function countUp(el, to, suf, dur = 1500) {
+    const dec = String(to).includes(".") ? 1 : 0, s = performance.now();
+    (function step(now) {
+      const t = clamp((now - s) / dur), e = 1 - Math.pow(1 - t, 4);
+      el.textContent = (dec ? (to * e).toFixed(1) : fmt(Math.round(to * e))) + suf;
+      if (t < 1) requestAnimationFrame(step);
+    })(s);
+  }
+  function setInset(r) {
+    const s = cp.el.style;
+    if (!r) { s.setProperty("--ct", "100%"); s.setProperty("--cr", "0px"); s.setProperty("--cb", "0px"); s.setProperty("--cl", "0px"); return; }
+    s.setProperty("--ct", `${r.top}px`); s.setProperty("--cl", `${r.left}px`);
+    s.setProperty("--cr", `${innerWidth - r.right}px`); s.setProperty("--cb", `${innerHeight - r.bottom}px`);
+  }
+  function renderCase(i) {
+    const c = CASES[i], n = CASES[(i + 1) % CASES.length];
+    cp.idx = i;
+    cp.el.style.setProperty("--c", c.color);
+    $("#cpIdx").textContent = `${pad(i + 1)} / ${pad(CASES.length)}`;
+    cp.body.innerHTML = `
+      <header class="cp-hero">
+        <p class="kicker">${esc(c.client)} · ${esc(c.sector)}</p>
+        <h2 class="cp-title">${esc(c.title)}</h2>
+        <div class="cp-big"><b>${esc(c.headline)}</b><span>${esc(c.headlineLabel)}</span></div>
+      </header>
+      <div class="cp-media"><canvas></canvas></div>
+      <section class="cp-sec"><h3>The brief</h3><p>${esc(c.brief)}</p></section>
+      <section class="cp-sec"><h3>The idea</h3><p>${esc(c.insight)}</p></section>
+      <section class="cp-sec"><h3>What we made</h3><div class="cp-made">${c.execution.map((x) => `<div><b>${esc(x.k)}</b><span>${esc(x.v)}</span></div>`).join("")}</div></section>
+      <section class="cp-sec cp-results"><h3>Results</h3><div class="cp-res">${c.results.map((r) => `<div><b data-to="${r.n}" data-suf="${esc(r.suf)}">0</b><span>${esc(r.label)}</span></div>`).join("")}</div></section>
+      <section class="cp-sec"><h3>In their words</h3><div><p class="cp-quote">“${esc(c.quote)}”</p><small>${esc(c.quoteBy)}</small></div></section>
+      <button class="cp-next" style="--nc:${n.color}"><span class="kicker">Next case · ${esc(n.sector)}</span><strong>${esc(n.title)} →</strong></button>`;
+    makeArt($(".cp-media canvas", cp.body), c.color, i + 11);
+    attachVideo($(".cp-media", cp.body), c.video);
+    $(".cp-next", cp.body).addEventListener("click", () => goCase(i + 1));
+    const res = $(".cp-results", cp.body);
+    const io = new IntersectionObserver(([e]) => {
+      if (!e.isIntersecting) return;
+      io.disconnect();
+      $$("[data-to]", res).forEach((b) => countUp(b, +b.dataset.to, b.dataset.suf));
+    }, { root: cp.scroll, threshold: 0.3 });
+    io.observe(res);
+    cp.scroll.scrollTop = 0;
+  }
+  function openCase(i) {
+    renderCase(i);
+    cp.el.classList.remove("is-anim");
+    setInset(panels[i] ? panels[i].getBoundingClientRect() : null);
+    cp.el.classList.add("is-open");
+    cp.el.setAttribute("aria-hidden", "false");
+    void cp.el.offsetWidth;
+    cp.el.classList.add("is-anim");
+    ["--ct", "--cr", "--cb", "--cl"].forEach((k) => cp.el.style.setProperty(k, "0px"));
+    document.body.classList.add("lock");
+  }
+  function closeCase() {
+    if (!cp.el.classList.contains("is-open")) return;
+    const p = panels[cp.idx], r = p && p.getBoundingClientRect();
+    setInset(r && r.bottom > 0 && r.top < innerHeight ? r : null);
+    document.body.classList.remove("lock");
+    setTimeout(() => { cp.el.classList.remove("is-open", "is-anim"); cp.el.setAttribute("aria-hidden", "true"); cp.body.innerHTML = ""; }, 900);
+  }
+  function goCase(i) {
+    i = (i + CASES.length) % CASES.length;
+    cp.body.classList.add("fade");
+    setTimeout(() => { renderCase(i); cp.body.classList.remove("fade"); }, 400);
+  }
+  function initPanel() {
+    cp.el = $("#cpanel"); cp.body = $("#cpBody"); cp.scroll = $("#cpScroll");
+    $("#cpClose").addEventListener("click", closeCase);
+    $("#cpNext").addEventListener("click", () => goCase(cp.idx + 1));
+    addEventListener("keydown", (e) => {
+      if (!cp.el.classList.contains("is-open")) return;
+      if (e.key === "Escape") closeCase();
+      if (e.key === "ArrowRight") goCase(cp.idx + 1);
+      if (e.key === "ArrowLeft") goCase(cp.idx - 1);
+    });
+  }
+
+  /* ---------------- 6. steps ---------------- */
+  const steps = { idx: -1 };
+  function initSteps() { steps.items = $$("#stepList li"); steps.img = $(".steps__img"); steps.now = $("#stepNow"); }
+  function updateSteps(vh) {
+    let idx = 0;
+    steps.items.forEach((li, i) => { if (li.getBoundingClientRect().top < vh * 0.6) idx = i; });
+    if (idx === steps.idx) return;
+    steps.idx = idx;
+    steps.items.forEach((li, i) => li.classList.toggle("on", i === idx));
+    if (steps.now) steps.now.textContent = pad(idx + 1);
+    steps.img.style.setProperty("--sz", (1.16 - idx * 0.04).toFixed(3));
+  }
+
+  /* ---------------- anchors ---------------- */
+  function initAnchors() {
+    $$('a[href^="#"]').forEach((a) => a.addEventListener("click", (e) => {
+      const id = a.getAttribute("href");
+      const t = id === "#top" ? null : id.length > 1 && $(id);
+      if (t === false) return;
+      e.preventDefault();
+      scrollTo({ top: t ? t.getBoundingClientRect().top + scrollY : 0, behavior: reduce ? "auto" : "smooth" });
+    }));
+  }
+
+  /* ---------------- master loop ---------------- */
+  function loop() {
+    const vh = innerHeight, y = scrollY;
+    $("#nav").classList.toggle("is-pill", y > vh * 0.55);
+    const hp = clamp(y / vh);
+    const hero = $("#hero");
+    hero.style.setProperty("--hy", hp.toFixed(3));
+    $("#heroImg").style.setProperty("--hz", (1.12 - hp * 0.1).toFixed(3));
+    updateFog(vh);
+    updateLight(vh);
+    updateWindow(vh);
+    updateCases(vh);
+    updateSteps(vh);
+    updateStage(vh);
+    requestAnimationFrame(loop);
+  }
+
+  /* ---------------- stage: cross-dissolve between scenes ----------------
+     Each layer fades in as its section's top passes the middle of the screen.
+     Later layers sit on top, so the earlier scene stays put underneath and the
+     result is a clean film dissolve with no edge between sections. */
+  const stage = { layers: [] };
+  function initStage() {
+    stage.layers = $$("#stage .layer").map((el) => ({ el, sec: document.getElementById(el.dataset.for) })).filter((l) => l.sec);
+  }
+  function updateStage(vh) {
+    const F = vh * 0.35;
+    const ops = stage.layers.map((l, i) => {
+      if (i === 0) return 1;
+      const top = l.sec.getBoundingClientRect().top;
+      return clamp((vh * 0.5 + F - top) / (2 * F));
+    });
+    // the wall photo follows the page once its section reaches the top
+    const rec = stage.layers.find((l) => l.el.dataset.for === "record");
+    if (rec) rec.el.firstElementChild.style.setProperty("--wy", `${Math.min(0, rec.sec.getBoundingClientRect().top)}px`);
+    let covered = false;
+    for (let i = ops.length - 1; i >= 0; i--) {
+      const el = stage.layers[i].el;
+      const o = covered ? 0 : ops[i];
+      el.style.opacity = o.toFixed(3);
+      el.style.visibility = o > 0 ? "visible" : "hidden";
+      if (ops[i] >= 0.999) covered = true;
+    }
+  }
+
+  /* ---------------- interactivity ---------------- */
+  const fine = matchMedia("(hover: hover) and (pointer: fine)").matches;
+  function initCursor() {
+    if (!fine) return;
+    const c = $("#cursor"), label = $("#cursorLabel"), p = { x: -100, y: -100 }, m = { x: -100, y: -100 };
+    addEventListener("pointermove", (e) => { m.x = e.clientX; m.y = e.clientY; });
+    (function tick() { p.x = lerp(p.x, m.x, 0.2); p.y = lerp(p.y, m.y, 0.2); c.style.transform = `translate3d(${p.x}px,${p.y}px,0)`; requestAnimationFrame(tick); })();
+    document.addEventListener("pointerover", (e) => {
+      const lab = e.target.closest("[data-cursor]");
+      c.classList.toggle("is-label", !!lab);
+      c.classList.toggle("is-link", !lab && !!e.target.closest("a, button, .light__item"));
+      if (lab) label.textContent = lab.dataset.cursor;
+    });
+  }
+  function initMagnetic() {
+    if (!fine) return;
+    $(".pill, .nav__cta").forEach((el) => {
+      el.addEventListener("pointermove", (e) => {
+        const r = el.getBoundingClientRect();
+        el.style.transform = `translate(${(e.clientX - r.left - r.width / 2) * 0.25}px, ${(e.clientY - r.top - r.height / 2) * 0.3}px)`;
+      });
+      el.addEventListener("pointerleave", () => (el.style.transform = ""));
+    });
+  }
+  function initHeroParallax() {
+    if (!fine) return;
+    const hero = $("#hero"), root = document.documentElement;
+    hero.addEventListener("pointermove", (e) => {
+      // set on the root so both the hero copy and its stage image can read it
+      root.style.setProperty("--px", (e.clientX / innerWidth - 0.5).toFixed(3));
+      root.style.setProperty("--py", (e.clientY / innerHeight - 0.5).toFixed(3));
+    });
+    hero.addEventListener("pointerleave", () => { root.style.setProperty("--px", 0); root.style.setProperty("--py", 0); });
+  }
+  function initWordReveal() {
+    const io = new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) { e.target.classList.add("is-in"); io.unobserve(e.target); } }), { threshold: 0.3 });
+    $(".light__title, .sky__title, .steps__title, .wall__title, .start__title, .foot__line").forEach((el) => {
+      let i = 0;
+      const walk = (node) => [...node.childNodes].forEach((ch) => {
+        if (ch.nodeType === 3) {
+          const frag = document.createDocumentFragment();
+          ch.textContent.split(/(\s+)/).forEach((w) => {
+            if (!w) return;
+            if (/^\s+$/.test(w)) return frag.appendChild(document.createTextNode(w));
+            const s = document.createElement("span"); s.className = "wr"; s.style.setProperty("--i", i++); s.textContent = w; frag.appendChild(s);
+          });
+          ch.replaceWith(frag);
+        } else if (ch.nodeType === 1 && ch.tagName !== "BR") walk(ch);
+      });
+      walk(el);
+      io.observe(el);
+    });
+  }
+  function initPanelHover() {
+    if (!fine) return;
+    panels.forEach((p) => {
+      p.dataset.cursor = "Open case";
+      p.addEventListener("pointermove", (e) => {
+        const r = p.getBoundingClientRect(), x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
+        p.style.setProperty("--rx", `${(x - 0.5) * 10}deg`); p.style.setProperty("--ry", `${(0.5 - y) * 8}deg`);
+        p.style.setProperty("--gx", `${x * 100}%`); p.style.setProperty("--gy", `${y * 100}%`);
+      });
+      p.addEventListener("pointerleave", () => { p.style.setProperty("--rx", "0deg"); p.style.setProperty("--ry", "0deg"); });
+    });
+  }
+  function initWallLight() {
+    const wall = $("#record"), spot = $("#wallSpot");
+    wall.addEventListener("pointermove", (e) => {
+      const r = wall.getBoundingClientRect();
+      spot.style.setProperty("--sx", `${e.clientX - r.left}px`); spot.style.setProperty("--sy", `${e.clientY - r.top}px`);
+    });
+    $("#wallNames li").forEach((li) => li.addEventListener("pointermove", (e) => {
+      const r = li.getBoundingClientRect();
+      li.style.setProperty("--lx", `${e.clientX - r.left}px`); li.style.setProperty("--ly", `${e.clientY - r.top}px`);
+    }));
+  }
+  function initLightClicks() {
+    const n = light.items.length;
+    light.items.forEach((it, i) => it.addEventListener("click", () => {
+      const s = light.section, p = (i / Math.max(1, n - 1) + 0.05) / 1.1;
+      scrollTo({ top: s.offsetTop + p * (s.offsetHeight - innerHeight), behavior: reduce ? "auto" : "smooth" });
+    }));
+  }
+
+  initTexture();
+  fill();
+  initRotator();
+  initClocks();
+  initFog();
+  initLight();
+  initWindow();
+  initCases();
+  initPanel();
+  initSteps();
+  initAnchors();
+  runArts();
+  loop();
+  initStage();
+  initCursor();
+  initMagnetic();
+  initHeroParallax();
+  initWordReveal();
+  initPanelHover();
+  initWallLight();
+  initLightClicks();
+  requestAnimationFrame(() => document.body.classList.add("is-ready"));
+})();
