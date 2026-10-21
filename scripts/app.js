@@ -82,7 +82,7 @@
     if (!n) return;
     const f = clamp(p * 1.1 - 0.05) * (n - 1);
     const itemH = light.items[0].offsetHeight;
-    const focus = vh * 0.45 - vh * 0.5; // the beam's brightest point, relative to the reel's anchor
+    const focus = vh * 0.56 - vh * 0.5; // the beam's brightest point, relative to the reel's anchor
     light.reel.style.transform = `translate3d(0, ${focus - (f + 0.5) * itemH}px, 0)`;
     const idx = Math.round(f);
     if (idx !== light.idx) {
@@ -100,10 +100,12 @@
   function initWindow() {
     win.section = $("#window"); win.img = $("#windowImg"); win.pin = $(".window__pin");
     const place = () => {
-      // where the window glass (46% x, 45% y of the photo) lands inside a cover-fitted background
-      const W = win.pin.clientWidth, H = win.pin.clientHeight, iw = 736, ih = 981;
+      // where the window glass lands inside the cover-fitted stage image (wide vs tall photo)
+      const tall = matchMedia("(max-aspect-ratio: 4/5)").matches;
+      const [iw, ih, fx, fy] = tall ? [1536, 2752, 0.5, 0.33] : [2752, 1536, 0.505, 0.27];
+      const W = innerWidth, H = innerHeight;
       const s = Math.max(W / iw, H / ih), dw = iw * s, dh = ih * s;
-      const ox = (W - dw) * 0.5 + dw * 0.465, oy = (H - dh) * 0.45 + dh * 0.45;
+      const ox = (W - dw) * 0.5 + dw * fx, oy = (H - dh) * 0.5 + dh * fy;
       win.img.style.transformOrigin = `${ox}px ${oy}px`;
     };
     place(); addEventListener("resize", place);
@@ -112,7 +114,8 @@
     const p = progress(win.section, vh);
     const z = clamp(p / 0.85);
     win.img.style.setProperty("--wz", (1 + Math.pow(z, 2.6) * 7).toFixed(3));
-    const tIn = clamp((p - 0.08) / 0.2), tOut = 1 - clamp((p - 0.5) / 0.18);
+    // the line shows while the room is still dark, then clears before the zoom fills the sky
+    const tIn = clamp((p - 0.02) / 0.12), tOut = 1 - clamp((p - 0.3) / 0.14);
     win.pin.style.setProperty("--wt", Math.min(tIn, tOut).toFixed(3));
     win.pin.style.setProperty("--wsky", clamp((p - 0.72) / 0.25).toFixed(3));
   }
@@ -302,7 +305,7 @@
     if (idx === steps.idx) return;
     steps.idx = idx;
     steps.items.forEach((li, i) => li.classList.toggle("on", i === idx));
-    steps.now.textContent = pad(idx + 1);
+    if (steps.now) steps.now.textContent = pad(idx + 1);
     steps.img.style.setProperty("--sz", (1.16 - idx * 0.04).toFixed(3));
   }
 
@@ -330,7 +333,36 @@
     updateWindow(vh);
     updateCases(vh);
     updateSteps(vh);
+    updateStage(vh);
     requestAnimationFrame(loop);
+  }
+
+  /* ---------------- stage: cross-dissolve between scenes ----------------
+     Each layer fades in as its section's top passes the middle of the screen.
+     Later layers sit on top, so the earlier scene stays put underneath and the
+     result is a clean film dissolve with no edge between sections. */
+  const stage = { layers: [] };
+  function initStage() {
+    stage.layers = $$("#stage .layer").map((el) => ({ el, sec: document.getElementById(el.dataset.for) })).filter((l) => l.sec);
+  }
+  function updateStage(vh) {
+    const F = vh * 0.35;
+    const ops = stage.layers.map((l, i) => {
+      if (i === 0) return 1;
+      const top = l.sec.getBoundingClientRect().top;
+      return clamp((vh * 0.5 + F - top) / (2 * F));
+    });
+    // the wall photo follows the page once its section reaches the top
+    const rec = stage.layers.find((l) => l.el.dataset.for === "record");
+    if (rec) rec.el.firstElementChild.style.setProperty("--wy", `${Math.min(0, rec.sec.getBoundingClientRect().top)}px`);
+    let covered = false;
+    for (let i = ops.length - 1; i >= 0; i--) {
+      const el = stage.layers[i].el;
+      const o = covered ? 0 : ops[i];
+      el.style.opacity = o.toFixed(3);
+      el.style.visibility = o > 0 ? "visible" : "hidden";
+      if (ops[i] >= 0.999) covered = true;
+    }
   }
 
   /* ---------------- interactivity ---------------- */
@@ -359,12 +391,13 @@
   }
   function initHeroParallax() {
     if (!fine) return;
-    const hero = $("#hero");
+    const hero = $("#hero"), root = document.documentElement;
     hero.addEventListener("pointermove", (e) => {
-      hero.style.setProperty("--px", (e.clientX / innerWidth - 0.5).toFixed(3));
-      hero.style.setProperty("--py", (e.clientY / innerHeight - 0.5).toFixed(3));
+      // set on the root so both the hero copy and its stage image can read it
+      root.style.setProperty("--px", (e.clientX / innerWidth - 0.5).toFixed(3));
+      root.style.setProperty("--py", (e.clientY / innerHeight - 0.5).toFixed(3));
     });
-    hero.addEventListener("pointerleave", () => { hero.style.setProperty("--px", 0); hero.style.setProperty("--py", 0); });
+    hero.addEventListener("pointerleave", () => { root.style.setProperty("--px", 0); root.style.setProperty("--py", 0); });
   }
   function initWordReveal() {
     const io = new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) { e.target.classList.add("is-in"); io.unobserve(e.target); } }), { threshold: 0.3 });
@@ -429,6 +462,7 @@
   initAnchors();
   runArts();
   loop();
+  initStage();
   initCursor();
   initMagnetic();
   initHeroParallax();

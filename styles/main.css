@@ -465,3 +465,73 @@ em { font-weight: 400; }
 .light__item { pointer-events: auto; cursor: pointer; }
 .light__mask { pointer-events: none; }
 .light__mask .light__item { pointer-events: auto; }
+
+/* =========================================================
+   STAGE: one fixed backdrop, scenes cross-dissolve on scroll.
+   Wide photos for landscape screens, tall ones for phones.
+   ========================================================= */
+.stage { position: fixed; inset: 0; z-index: 0; overflow: hidden; background: var(--ink); pointer-events: none; }
+.layer { position: absolute; inset: 0; opacity: 0; visibility: hidden; will-change: opacity; }
+.layer:first-child { opacity: 1; visibility: visible; }
+.layer > div { position: absolute; inset: 0; background-size: cover; background-position: center; background-repeat: no-repeat; }
+.layer::after { content: ""; position: absolute; inset: 0; pointer-events: none; }
+main, footer { position: relative; z-index: 1; }
+
+/* scene photos */
+.hero__img { inset: -3%; background-image: url(../assets/scenes/hero-wide.jpg); background-position: center 62%; }
+.lay-wall { background-image: url(../assets/scenes/wall-wide.jpg); background-position: center 30%; }
+.fog__img { background-image: url(../assets/scenes/fog-wide.jpg); background-position: 60% 70%; }
+.layer .fog__layer { inset: -20%; }
+.light__lamp { left: 0; top: 0; height: auto; aspect-ratio: auto; transform: none; background-image: url(../assets/scenes/lamp-wide.jpg); background-position: center 30%; }
+.window__img { background-image: url(../assets/scenes/window-wide.jpg); background-position: center; }
+.lay-sky { background-image: url(../assets/scenes/sky-wide.jpg); transform: scale(1.06); }
+.steps__img { background-image: url(../assets/scenes/stairs-wide.jpg); background-position: center; transform: scale(var(--sz, 1.04)); }
+.lay-grad { background: linear-gradient(170deg, #34405a 0%, #3c4a66 30%, #5e6d86 55%, #a6a9a6 72%, #fbe4c6 90%); }
+.lay-dusk { background-image: url(../assets/scenes/dusk-wide.jpg); background-position: center 70%; }
+
+@media (max-aspect-ratio: 4/5) {
+  .hero__img { background-image: url(../assets/scenes/hero-tall.jpg); background-position: center 70%; }
+  .lay-wall { background-image: url(../assets/scenes/wall-tall.jpg); background-position: center 20%; }
+  .fog__img { background-image: url(../assets/scenes/fog-tall.jpg); background-position: center 75%; }
+  .light__lamp { background-image: url(../assets/scenes/lamp-tall.jpg); background-position: center 20%; }
+  .window__img { background-image: url(../assets/scenes/window-tall.jpg); }
+  .lay-sky { background-image: url(../assets/scenes/sky-tall.jpg); }
+  .steps__img { background-image: url(../assets/scenes/stairs-tall.jpg); }
+  .lay-dusk { background-image: url(../assets/scenes/dusk-tall.jpg); }
+}
+
+/* readability shades, per scene */
+.layer[data-for="hero"]::after { background: linear-gradient(180deg, rgba(14,15,17,.45) 0%, rgba(14,15,17,.08) 35%, rgba(14,15,17,.05) 62%, rgba(14,15,17,.55) 100%); }
+.layer[data-for="fog"]::after { background: rgba(3,20,27,.18); }
+.layer[data-for="work"]::after { background: rgba(255,255,255,.12); }
+.layer[data-for="steps"]::after { background: linear-gradient(90deg, rgba(26,18,10,.82) 0%, rgba(26,18,10,.55) 45%, rgba(26,18,10,.1) 75%); }
+.layer[data-for="foot"]::after { background: linear-gradient(180deg, rgba(14,15,17,0) 45%, rgba(14,15,17,.7) 100%); }
+@media (max-aspect-ratio: 4/5) {
+  .layer[data-for="steps"]::after { background: rgba(26,18,10,.6); }
+}
+
+/* sections are now transparent; the stage paints behind them */
+.hero, .fog, .light, .window, .sky, .steps, .wall, .start, .foot { background: transparent !important; }
+.hero__copy { position: relative; z-index: 1; }
+
+/* record (lamp on the wall): leave room for the lamp before the copy */
+.wall { padding-top: 46vh; }
+.wall__inner { margin-top: 0; }
+.wall__spot { z-index: 0; }
+
+/* steps: full-bleed stairwell, list on the hazy left side */
+.steps__grid { grid-template-columns: minmax(0, 640px); }
+
+/* window line sits on the dark room, so it is light */
+.window__text { color: var(--paper); text-shadow: 0 2px 30px rgba(0,0,0,.6); }
+.window__pin::after { display: none; }
+
+/* the fixed stage replaces the section-level parallax */
+.fog__pin, .light__pin, .window__pin { background: transparent; }
+.layer > .hero__img { inset: -3%; }
+
+/* record: once the wall has dissolved in, the lamp scrolls up with the copy
+   (so the heading never sits on the lamp). The photo melts into the wall colour. */
+.layer[data-for="record"] { background: #cdd0d0; }
+.layer > .lay-wall { bottom: auto; height: 100vh; height: 100lvh; transform: translate3d(0, var(--wy, 0px), 0);
+  -webkit-mask-image: linear-gradient(180deg, #000 70%, transparent 100%); mask-image: linear-gradient(180deg, #000 70%, transparent 100%); }
